@@ -96,4 +96,7 @@ dependencies {
 
     // MediaPipe Library
     implementation 'com.google.mediapipe:tasks-vision:0.10.26'
+
+    // ARCore
+    implementation 'com.google.ar:core:1.43.0'
 }

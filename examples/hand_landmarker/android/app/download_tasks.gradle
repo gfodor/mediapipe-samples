@@ -19,4 +19,11 @@ task downloadTaskFile(type: Download) {
     overwrite false
 }
 
-preBuild.dependsOn downloadTaskFile
+// Download built-in gesture recognizer model
+task downloadGestureTaskFile(type: Download) {
+    src 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task'
+    dest project.ext.ASSET_DIR + '/gesture_recognizer.task'
+    overwrite false
+}
+
+preBuild.dependsOn downloadTaskFile, downloadGestureTaskFile

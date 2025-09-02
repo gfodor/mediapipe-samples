@@ -42,8 +42,10 @@
         Threshold</string>
     <string name="label_hand_presence_confidence_threshold">Presence
         Threshold</string>
+    <string name="label_gesture_threshold">Gesture Threshold</string>
     <string name="label_num_hands">Number of Hands</string>
     <string name="label_delegate">Delegate</string>
+    <string name="label_resolution">Resolution</string>
 
     <string-array name="delegate_spinner_titles">
         <item>CPU</item>

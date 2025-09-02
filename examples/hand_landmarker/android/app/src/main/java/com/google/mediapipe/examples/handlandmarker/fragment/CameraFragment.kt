@@ -17,29 +17,51 @@ package com.google.mediapipe.examples.handlandmarker.fragment
 
 import android.annotation.SuppressLint
 import android.content.res.Configuration
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
+import android.util.Size
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Toast
+import android.graphics.SurfaceTexture
+import android.graphics.ImageFormat
 import androidx.camera.core.Preview
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Camera
 import androidx.camera.core.AspectRatio
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.navigation.Navigation
+import android.hardware.camera2.CameraCharacteristics
 import com.google.mediapipe.examples.handlandmarker.HandLandmarkerHelper
 import com.google.mediapipe.examples.handlandmarker.MainViewModel
 import com.google.mediapipe.examples.handlandmarker.R
 import com.google.mediapipe.examples.handlandmarker.databinding.FragmentCameraBinding
 import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
+import com.google.mediapipe.tasks.vision.gesturerecognizer.GestureRecognizer
+import com.google.mediapipe.tasks.vision.gesturerecognizer.GestureRecognizerResult
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.core.Delegate
+import com.google.mediapipe.tasks.components.processors.ClassifierOptions
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.framework.image.MPImage
+import com.google.mediapipe.framework.image.ByteBufferImageBuilder
+import com.google.mediapipe.examples.handlandmarker.gl.YuvGlConverter
+import com.google.mediapipe.examples.handlandmarker.gl.OesToRgbaConverter
+import com.google.ar.core.Session
+import com.google.ar.core.ArCoreApk
+import com.google.ar.core.Frame
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -49,6 +71,15 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
 
     companion object {
         private const val TAG = "Hand Landmarker"
+        private const val PREFS_NAME = "mp_hand_landmarker_settings"
+        private const val KEY_DELEGATE = "delegate"
+        private const val KEY_DETECTION = "min_hand_detection_conf"
+        private const val KEY_TRACKING = "min_hand_tracking_conf"
+        private const val KEY_PRESENCE = "min_hand_presence_conf"
+        private const val KEY_MAX_HANDS = "max_hands"
+        private const val KEY_GESTURE_THRESHOLD = "gesture_threshold"
+        private const val KEY_RES_W = "res_width"
+        private const val KEY_RES_H = "res_height"
     }
 
     private var _fragmentCameraBinding: FragmentCameraBinding? = null
@@ -62,7 +93,70 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
     private var imageAnalyzer: ImageAnalysis? = null
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    private var cameraFacing = CameraSelector.LENS_FACING_FRONT
+    private var cameraFacing = CameraSelector.LENS_FACING_BACK
+    private var gestureThreshold: Float = 0.1f
+    private var availableResolutions: List<Size> = emptyList()
+    private var selectedResolution: Size? = null
+    private var gestureRecognizer: GestureRecognizer? = null
+    @Volatile private var lastInputWidth: Int = 0
+    @Volatile private var lastInputHeight: Int = 0
+    // Reusable RGBA bitmap to avoid per-frame allocations
+    private var rgbaBitmap: android.graphics.Bitmap? = null
+    private var rgbaW: Int = 0
+    private var rgbaH: Int = 0
+    private var yuvGl: YuvGlConverter? = null
+    private var arSession: Session? = null
+    private var oesConv: OesToRgbaConverter? = null
+    @Volatile private var arRunning = false
+    private val targetW = 640
+    private val targetH = 480
+    @Volatile private var arInstallRequested = true
+
+    private fun getPrefs() = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private fun loadSettings() {
+        val p = getPrefs()
+        viewModel.setMinHandDetectionConfidence(
+            p.getFloat(KEY_DETECTION, viewModel.currentMinHandDetectionConfidence)
+        )
+        viewModel.setMinHandTrackingConfidence(
+            p.getFloat(KEY_TRACKING, viewModel.currentMinHandTrackingConfidence)
+        )
+        viewModel.setMinHandPresenceConfidence(
+            p.getFloat(KEY_PRESENCE, viewModel.currentMinHandPresenceConfidence)
+        )
+        viewModel.setMaxHands(p.getInt(KEY_MAX_HANDS, viewModel.currentMaxHands))
+        viewModel.setDelegate(p.getInt(KEY_DELEGATE, viewModel.currentDelegate))
+        gestureThreshold = p.getFloat(KEY_GESTURE_THRESHOLD, 0.1f)
+        val rw = p.getInt(KEY_RES_W, -1)
+        val rh = p.getInt(KEY_RES_H, -1)
+        selectedResolution = if (rw > 0 && rh > 0) Size(rw, rh) else null
+    }
+    private fun saveSettings() {
+        try {
+            val editor = getPrefs().edit()
+            if (this::handLandmarkerHelper.isInitialized) {
+                editor.putInt(KEY_DELEGATE, handLandmarkerHelper.currentDelegate)
+                editor.putFloat(KEY_DETECTION, handLandmarkerHelper.minHandDetectionConfidence)
+                editor.putFloat(KEY_TRACKING, handLandmarkerHelper.minHandTrackingConfidence)
+                editor.putFloat(KEY_PRESENCE, handLandmarkerHelper.minHandPresenceConfidence)
+                editor.putInt(KEY_MAX_HANDS, handLandmarkerHelper.maxNumHands)
+            } else {
+                editor.putInt(KEY_DELEGATE, viewModel.currentDelegate)
+                editor.putFloat(KEY_DETECTION, viewModel.currentMinHandDetectionConfidence)
+                editor.putFloat(KEY_TRACKING, viewModel.currentMinHandTrackingConfidence)
+                editor.putFloat(KEY_PRESENCE, viewModel.currentMinHandPresenceConfidence)
+                editor.putInt(KEY_MAX_HANDS, viewModel.currentMaxHands)
+            }
+            editor.putFloat(KEY_GESTURE_THRESHOLD, gestureThreshold)
+            selectedResolution?.let { s ->
+                editor.putInt(KEY_RES_W, s.width)
+                editor.putInt(KEY_RES_H, s.height)
+            }
+            editor.apply()
+        } catch (_: Exception) {
+            // ignore
+        }
+    }
 
     /** Blocking ML operations are performed using this executor */
     private lateinit var backgroundExecutor: ExecutorService
@@ -83,7 +177,12 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
             if (handLandmarkerHelper.isClose()) {
                 handLandmarkerHelper.setupHandLandmarker()
             }
+            if (gestureRecognizer == null) {
+                setupGestureRecognizer()
+            }
         }
+        // Start ARCore on UI thread to satisfy lifecycle expectations
+        activity?.runOnUiThread { startArLoop() }
     }
 
     override fun onPause() {
@@ -95,8 +194,15 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
             viewModel.setMinHandPresenceConfidence(handLandmarkerHelper.minHandPresenceConfidence)
             viewModel.setDelegate(handLandmarkerHelper.currentDelegate)
 
-            // Close the HandLandmarkerHelper and release resources
-            backgroundExecutor.execute { handLandmarkerHelper.clearHandLandmarker() }
+            // Close the HandLandmarkerHelper and GestureRecognizer; release resources
+            // Pause ARCore on UI thread, then release others in background
+            activity?.runOnUiThread { stopArLoop() }
+            backgroundExecutor.execute {
+                handLandmarkerHelper.clearHandLandmarker()
+                closeGestureRecognizer()
+                try { yuvGl?.release() } catch (_: Exception) {}
+            }
+            saveSettings()
         }
     }
 
@@ -109,6 +215,7 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         backgroundExecutor.awaitTermination(
             Long.MAX_VALUE, TimeUnit.NANOSECONDS
         )
+        try { yuvGl?.release() } catch (_: Exception) {}
     }
 
     override fun onCreateView(
@@ -129,11 +236,15 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         // Initialize our background executor
         backgroundExecutor = Executors.newSingleThreadExecutor()
 
-        // Wait for the views to be properly laid out
-        fragmentCameraBinding.viewFinder.post {
-            // Set up the camera and its use cases
-            setUpCamera()
-        }
+        // Load persisted settings before creating helper
+        loadSettings()
+
+        // Ensure gesture label overlays above preview/overlay
+        fragmentCameraBinding.gestureLabel.bringToFront()
+
+        // Hide CameraX view and set a white background. ARCore provides frames offscreen.
+        fragmentCameraBinding.viewFinder.visibility = View.GONE
+        fragmentCameraBinding.cameraContainer.setBackgroundColor(android.graphics.Color.WHITE)
 
         // Create the HandLandmarkerHelper that will handle the inference
         backgroundExecutor.execute {
@@ -147,6 +258,9 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                 currentDelegate = viewModel.currentDelegate,
                 handLandmarkerHelperListener = this
             )
+            // Initialize built-in gesture recognizer on the same executor
+            setupGestureRecognizer()
+            saveSettings()
         }
 
         // Attach listeners to UI control widgets
@@ -169,6 +283,10 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
             String.format(
                 Locale.US, "%.2f", viewModel.currentMinHandPresenceConfidence
             )
+
+        // Gesture threshold
+        fragmentCameraBinding.bottomSheetLayout.gestureThresholdValue.text =
+            String.format(Locale.US, "%.3f", gestureThreshold)
 
         // When clicked, lower hand detection score threshold floor
         fragmentCameraBinding.bottomSheetLayout.detectionThresholdMinus.setOnClickListener {
@@ -258,6 +376,22 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                     /* no op */
                 }
             }
+
+        // Gesture threshold minus
+        fragmentCameraBinding.bottomSheetLayout.gestureThresholdMinus.setOnClickListener {
+            if (gestureThreshold >= 0.005f) {
+                gestureThreshold = (gestureThreshold - 0.005f).coerceAtLeast(0f)
+                updateControlsUi()
+            }
+        }
+
+        // Gesture threshold plus
+        fragmentCameraBinding.bottomSheetLayout.gestureThresholdPlus.setOnClickListener {
+            if (gestureThreshold <= 0.995f) {
+                gestureThreshold = (gestureThreshold + 0.005f).coerceAtMost(1f)
+                updateControlsUi()
+            }
+        }
     }
 
     // Update the values displayed in the bottom sheet. Reset Handlandmarker
@@ -284,88 +418,136 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                 handLandmarkerHelper.minHandPresenceConfidence
             )
 
+        // Update gesture threshold UI
+        fragmentCameraBinding.bottomSheetLayout.gestureThresholdValue.text =
+            String.format(Locale.US, "%.3f", gestureThreshold)
+
         // Needs to be cleared instead of reinitialized because the GPU
         // delegate needs to be initialized on the thread using it when applicable
         backgroundExecutor.execute {
             handLandmarkerHelper.clearHandLandmarker()
             handLandmarkerHelper.setupHandLandmarker()
+            closeGestureRecognizer()
+            setupGestureRecognizer()
+            saveSettings()
         }
         fragmentCameraBinding.overlay.clear()
     }
 
     // Initialize CameraX, and prepare to bind the camera use cases
     private fun setUpCamera() {
-        val cameraProviderFuture =
-            ProcessCameraProvider.getInstance(requireContext())
-        cameraProviderFuture.addListener(
-            {
-                // CameraProvider
-                cameraProvider = cameraProviderFuture.get()
+        // no-op; replaced by ARCore input
+    }
 
-                // Build and bind the camera use cases
-                bindCameraUseCases()
-            }, ContextCompat.getMainExecutor(requireContext())
-        )
+    private fun findWidestBackCameraInfo(): androidx.camera.core.CameraInfo? {
+        val provider = cameraProvider ?: return null
+        var bestInfo: androidx.camera.core.CameraInfo? = null
+        var minFocal = Float.MAX_VALUE
+        for (info in provider.availableCameraInfos) {
+            try {
+                val c2 = Camera2CameraInfo.from(info)
+                val facing = c2.getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
+                if (facing != CameraCharacteristics.LENS_FACING_BACK) continue
+                val focals = c2.getCameraCharacteristic(
+                    CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS
+                )
+                if (focals == null || focals.isEmpty()) continue
+                var f = Float.MAX_VALUE
+                for (v in focals) if (v < f) f = v
+                if (f < minFocal) {
+                    minFocal = f
+                    bestInfo = info
+                }
+            } catch (_: Exception) { }
+        }
+        return bestInfo
+    }
+
+    private fun setupResolutionSpinner() {
+        val info = findWidestBackCameraInfo() ?: return
+        val chars = Camera2CameraInfo.from(info)
+            .getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return
+        val previewSizes = chars.getOutputSizes(SurfaceTexture::class.java)?.toList() ?: emptyList()
+        val analysisSizes = chars.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: emptyList()
+        val intersect = previewSizes.intersect(analysisSizes.toSet()).toList()
+        if (intersect.isEmpty()) return
+        availableResolutions = intersect.sortedByDescending { it.width * it.height }
+
+        // Pick default: saved, else largest 4:3, else largest
+        val saved = selectedResolution
+        val defaultIndex = when {
+            saved != null -> availableResolutions.indexOfFirst { it.width == saved.width && it.height == saved.height }.takeIf { it >= 0 }
+            else -> null
+        } ?: run {
+            val fourThirds = availableResolutions
+                .withIndex()
+                .filter { (_, s) -> kotlin.math.abs((s.width.toFloat() / s.height) - (4f/3f)) < 0.02f }
+            if (fourThirds.isNotEmpty()) fourThirds.maxByOrNull { it.value.width * it.value.height }?.index ?: 0
+            else 0
+        }
+
+        val entries = availableResolutions.map { "${it.width}x${it.height}" }
+        val adapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_dropdown_item, entries)
+        fragmentCameraBinding.bottomSheetLayout.spinnerResolution.adapter = adapter
+        fragmentCameraBinding.bottomSheetLayout.spinnerResolution.setSelection(defaultIndex, false)
+        selectedResolution = availableResolutions[defaultIndex]
+
+        fragmentCameraBinding.bottomSheetLayout.spinnerResolution.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (position in availableResolutions.indices) {
+                    val newSize = availableResolutions[position]
+                    if (selectedResolution != newSize) {
+                        selectedResolution = newSize
+                        saveSettings()
+                        bindCameraUseCases()
+                    }
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) { /* no-op */ }
+        }
     }
 
     // Declare and bind preview, capture and analysis use cases
     @SuppressLint("UnsafeOptInUsageError")
-    private fun bindCameraUseCases() {
-
-        // CameraProvider
-        val cameraProvider = cameraProvider
-            ?: throw IllegalStateException("Camera initialization failed.")
-
-        val cameraSelector =
-            CameraSelector.Builder().requireLensFacing(cameraFacing).build()
-
-        // Preview. Only using the 4:3 ratio because this is the closest to our models
-        preview = Preview.Builder().setTargetAspectRatio(AspectRatio.RATIO_4_3)
-            .setTargetRotation(fragmentCameraBinding.viewFinder.display.rotation)
-            .build()
-
-        // ImageAnalysis. Using RGBA 8888 to match how our models work
-        imageAnalyzer =
-            ImageAnalysis.Builder().setTargetAspectRatio(AspectRatio.RATIO_4_3)
-                .setTargetRotation(fragmentCameraBinding.viewFinder.display.rotation)
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
-                // The analyzer can then be assigned to the instance
-                .also {
-                    it.setAnalyzer(backgroundExecutor) { image ->
-                        detectHand(image)
+    private fun bindCameraUseCases() { /* no-op */ }
+    
+    private fun buildBackWidestCameraSelector(): CameraSelector {
+        val widestBackFilter = androidx.camera.core.CameraFilter { cameraInfos ->
+            // Pick the back camera with the smallest focal length (widest FoV)
+            var bestInfo: androidx.camera.core.CameraInfo? = null
+            var minFocal = Float.MAX_VALUE
+            for (info in cameraInfos) {
+                try {
+                    val c2 = Camera2CameraInfo.from(info)
+                    val focals = c2.getCameraCharacteristic(
+                        CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS
+                    )
+                    if (focals == null || focals.isEmpty()) continue
+                    var f = Float.MAX_VALUE
+                    for (v in focals) if (v < f) f = v
+                    if (f < minFocal) {
+                        minFocal = f
+                        bestInfo = info
                     }
+                } catch (_: Exception) {
+                    // Ignore and continue
                 }
-
-        // Must unbind the use-cases before rebinding them
-        cameraProvider.unbindAll()
-
-        try {
-            // A variable number of use-cases can be passed here -
-            // camera provides access to CameraControl & CameraInfo
-            camera = cameraProvider.bindToLifecycle(
-                this, cameraSelector, preview, imageAnalyzer
-            )
-
-            // Attach the viewfinder's surface provider to preview use case
-            preview?.setSurfaceProvider(fragmentCameraBinding.viewFinder.surfaceProvider)
-        } catch (exc: Exception) {
-            Log.e(TAG, "Use case binding failed", exc)
+            }
+            if (bestInfo != null) listOf(bestInfo) else cameraInfos
         }
+
+        return CameraSelector.Builder()
+            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+            .addCameraFilter(widestBackFilter)
+            .build()
     }
 
-    private fun detectHand(imageProxy: ImageProxy) {
-        handLandmarkerHelper.detectLiveStream(
-            imageProxy = imageProxy,
-            isFrontCamera = cameraFacing == CameraSelector.LENS_FACING_FRONT
-        )
-    }
+    private fun detectHand(imageProxy: ImageProxy) { /* no-op */ }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        imageAnalyzer?.targetRotation =
-            fragmentCameraBinding.viewFinder.display.rotation
+        // no-op for ARCore input
     }
 
     // Update UI after hand have been detected. Extracts original
@@ -382,8 +564,8 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                 // Pass necessary information to OverlayView for drawing on the canvas
                 fragmentCameraBinding.overlay.setResults(
                     resultBundle.results.first(),
-                    resultBundle.inputImageHeight,
-                    resultBundle.inputImageWidth,
+                    if (lastInputHeight > 0) lastInputHeight else resultBundle.inputImageHeight,
+                    if (lastInputWidth > 0) lastInputWidth else resultBundle.inputImageWidth,
                     RunningMode.LIVE_STREAM
                 )
 
@@ -393,6 +575,44 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         }
     }
 
+    private fun setupGestureRecognizer() {
+        try {
+            val base = BaseOptions.builder()
+                .setModelAssetPath("gesture_recognizer.task")
+                .setDelegate(Delegate.GPU)
+                .build()
+
+            val canned = ClassifierOptions.builder()
+                .setScoreThreshold(0.5f)
+                .setCategoryAllowlist(listOf("Closed_Fist", "Open_Palm"))
+                .build()
+
+            val opts = GestureRecognizer.GestureRecognizerOptions.builder()
+                .setBaseOptions(base)
+                .setRunningMode(RunningMode.LIVE_STREAM)
+                .setNumHands(2)
+                .setCannedGesturesClassifierOptions(canned)
+                .setMinHandDetectionConfidence(0.55f)
+                .setMinHandPresenceConfidence(0.55f)
+                .setMinTrackingConfidence(0.55f)
+                .setResultListener(this::onGestureResults)
+                .build()
+
+            gestureRecognizer = GestureRecognizer.createFromOptions(requireContext(), opts)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to init GestureRecognizer: ${e.message}")
+        }
+    }
+
+    private fun closeGestureRecognizer() {
+        try { gestureRecognizer?.close() } catch (_: Exception) {}
+        gestureRecognizer = null
+    }
+
+    private fun onGestureResults(result: GestureRecognizerResult, input: MPImage) {
+        // Do not override tracking position label; keep recognition running only for testing.
+    }
+
     override fun onError(error: String, errorCode: Int) {
         activity?.runOnUiThread {
             Toast.makeText(requireContext(), error, Toast.LENGTH_SHORT).show()
@@ -400,6 +620,99 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                 fragmentCameraBinding.bottomSheetLayout.spinnerDelegate.setSelection(
                     HandLandmarkerHelper.DELEGATE_CPU, false
                 )
+            }
+        }
+    }
+
+    // ARCore integration: offscreen session using external OES camera texture
+    private fun ensureArSession(): Boolean {
+        // Ensure camera permission
+        if (!PermissionsFragment.hasPermissions(requireContext())) {
+            Log.e(TAG, "ARCore: camera permission not granted")
+            return false
+        }
+        try {
+            if (arSession == null) {
+                val status = ArCoreApk.getInstance().requestInstall(requireActivity(), arInstallRequested)
+                if (status == ArCoreApk.InstallStatus.INSTALL_REQUESTED) {
+                    arInstallRequested = false
+                    Log.i(TAG, "ARCore: install requested; waiting for onResume")
+                    return false
+                }
+                arSession = Session(requireActivity())
+                Log.i(TAG, "ARCore: session created")
+            }
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "ARCore: session create failed (" + e.javaClass.simpleName + "): " + (e.message ?: ""))
+            return false
+        }
+    }
+
+    private fun startArLoop() {
+        if (!ensureArSession()) return
+        if (arRunning) return
+        arRunning = true
+        backgroundExecutor.execute {
+            if (oesConv == null) {
+                oesConv = OesToRgbaConverter(targetW, targetH)
+                try { arSession?.setCameraTextureNames(intArrayOf(oesConv!!.getExternalTextureId())) } catch (_: Exception) {}
+            }
+            // Resume on UI thread after texture id is provided
+            val latch = java.util.concurrent.CountDownLatch(1)
+            activity?.runOnUiThread {
+                try {
+                    // Configure default session if needed
+                    try {
+                        val s = arSession
+                        if (s != null) {
+                            val cfg = com.google.ar.core.Config(s)
+                            s.configure(cfg)
+                        }
+                    } catch (_: Exception) {}
+                    arSession?.resume()
+                    Log.i(TAG, "ARCore: session resumed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "ARCore: resume failed (" + e.javaClass.simpleName + "): " + (e.message ?: ""))
+                } finally {
+                    latch.countDown()
+                }
+            }
+            try { latch.await() } catch (_: InterruptedException) {}
+            activity?.runOnUiThread {
+                Toast.makeText(requireContext(), "ARCore session started", Toast.LENGTH_SHORT).show()
+            }
+            arUpdateLoop()
+        }
+    }
+
+    private fun stopArLoop() {
+        arRunning = false
+        try { arSession?.pause() } catch (_: Exception) {}
+        try { oesConv?.release() } catch (_: Exception) {}
+        oesConv = null
+    }
+
+    private fun arUpdateLoop() {
+        val session = arSession ?: return
+        while (arRunning) {
+            try {
+                val frame: Frame = session.update()
+                val pose = frame.camera.pose
+                activity?.runOnUiThread {
+                    fragmentCameraBinding.gestureLabel.text = String.format("(%.2f, %.2f, %.2f)", pose.tx(), pose.ty(), pose.tz())
+                    fragmentCameraBinding.gestureLabel.visibility = View.VISIBLE
+                }
+
+                val rgba = oesConv!!.convert(frame)
+                val mpImage = ByteBufferImageBuilder(rgba, targetW, targetH, MPImage.IMAGE_FORMAT_RGBA).build()
+                val frameTime = android.os.SystemClock.uptimeMillis()
+                lastInputWidth = targetW
+                lastInputHeight = targetH
+                handLandmarkerHelper.detectAsync(mpImage, frameTime)
+                gestureRecognizer?.recognizeAsync(mpImage, frameTime)
+            } catch (e: Exception) {
+                Log.e(TAG, "AR loop error: ${'$'}{e.message}")
             }
         }
     }

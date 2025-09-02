@@ -23,6 +23,8 @@
 
     <!-- Declare features -->
     <uses-feature android:name="android.hardware.camera" />
+    <uses-feature android:name="com.google.ar.core" android:required="false" />
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
 
     <!-- Declare permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -36,6 +38,11 @@
         android:taskAffinity=""
         android:theme="@style/AppTheme"
         tools:ignore="AllowBackup">
+
+        <!-- Declare ARCore use (required or optional). Using optional to allow non-AR fallback. -->
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional" />
 
         <activity
             android:name=".MainActivity"

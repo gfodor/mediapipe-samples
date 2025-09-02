@@ -29,6 +29,7 @@ import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 
@@ -72,14 +73,9 @@ class HandLandmarkerHelper(
         val baseOptionBuilder = BaseOptions.builder()
 
         // Use the specified hardware for running the model. Default to CPU
-        when (currentDelegate) {
-            DELEGATE_CPU -> {
-                baseOptionBuilder.setDelegate(Delegate.CPU)
-            }
-            DELEGATE_GPU -> {
-                baseOptionBuilder.setDelegate(Delegate.GPU)
-            }
-        }
+        // Hardcode GPU for lowest latency
+        currentDelegate = DELEGATE_GPU
+        baseOptionBuilder.setDelegate(Delegate.GPU)
 
         baseOptionBuilder.setModelAssetPath(MP_HAND_LANDMARKER_TASK)
 
@@ -196,6 +192,11 @@ class HandLandmarkerHelper(
         handLandmarker?.detectAsync(mpImage, frameTime)
         // As we're using running mode LIVE_STREAM, the landmark result will
         // be returned in returnLivestreamResult function
+    }
+
+    // Overload that accepts ImageProcessingOptions (for rotation without copies)
+    fun detectAsync(mpImage: MPImage, imgOpts: ImageProcessingOptions, frameTime: Long) {
+        handLandmarker?.detectAsync(mpImage, imgOpts, frameTime)
     }
 
     // Accepts the URI for a video file loaded from the user's gallery and attempts to run
