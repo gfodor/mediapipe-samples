@@ -368,8 +368,8 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
             }
         }
         fragmentCameraBinding.bottomSheetLayout.pinchThresholdPlus.setOnClickListener {
-            if (pinchThreshold < 10.0f) {
-                pinchThreshold = (pinchThreshold + 0.05f).coerceAtMost(10.0f)
+            if (pinchThreshold < 20.0f) {
+                pinchThreshold = (pinchThreshold + 0.05f).coerceAtMost(20.0f)
                 fragmentCameraBinding.bottomSheetLayout.pinchThresholdValue.text =
                     String.format(Locale.US, "%.2f", pinchThreshold)
                 saveSettings()
@@ -386,8 +386,8 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
             }
         }
         fragmentCameraBinding.bottomSheetLayout.pinchReleaseThresholdPlus.setOnClickListener {
-            if (pinchReleaseThreshold < 10.0f) {
-                pinchReleaseThreshold = (pinchReleaseThreshold + 0.05f).coerceAtMost(10.0f)
+            if (pinchReleaseThreshold < 20.0f) {
+                pinchReleaseThreshold = (pinchReleaseThreshold + 0.05f).coerceAtMost(20.0f)
                 fragmentCameraBinding.bottomSheetLayout.pinchReleaseThresholdValue.text =
                     String.format(Locale.US, "%.2f", pinchReleaseThreshold)
                 saveSettings()
@@ -645,6 +645,7 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                     }
                     val hr = resultBundle.results.firstOrNull()
                     var minRelative = Double.MAX_VALUE
+                    var minTipTip = Double.MAX_VALUE
                     if (hr != null && hr.landmarks().isNotEmpty()) {
                         for (hand in hr.landmarks()) {
                             if (hand.size >= 9) {
@@ -653,18 +654,35 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                                 val thumbIp = hand[3]
                                 val indexDip = hand[7]
 
-                                val dTip = euclideanDistance2D(thumbTip.x().toDouble(), thumbTip.y().toDouble(), indexTip.x().toDouble(), indexTip.y().toDouble())
-                                val dThumb = euclideanDistance2D(thumbTip.x().toDouble(), thumbTip.y().toDouble(), thumbIp.x().toDouble(), thumbIp.y().toDouble())
-                                val dIndex = euclideanDistance2D(indexTip.x().toDouble(), indexTip.y().toDouble(), indexDip.x().toDouble(), indexDip.y().toDouble())
+                                // Use 3D distance (x,y,z) instead of 2D for robustness
+                                val dTip = euclideanDistance3D(
+                                    thumbTip.x().toDouble(), thumbTip.y().toDouble(), thumbTip.z().toDouble(),
+                                    indexTip.x().toDouble(), indexTip.y().toDouble(), indexTip.z().toDouble()
+                                )
+                                val dThumb = euclideanDistance3D(
+                                    thumbTip.x().toDouble(), thumbTip.y().toDouble(), thumbTip.z().toDouble(),
+                                    thumbIp.x().toDouble(), thumbIp.y().toDouble(), thumbIp.z().toDouble()
+                                )
+                                val dIndex = euclideanDistance3D(
+                                    indexTip.x().toDouble(), indexTip.y().toDouble(), indexTip.z().toDouble(),
+                                    indexDip.x().toDouble(), indexDip.y().toDouble(), indexDip.z().toDouble()
+                                )
 
                                 val denom = 0.5 * (dThumb + dIndex)
                                 if (denom > 1e-6) {
                                     val relative = (dTip * 10.0) / denom
-                                    if (relative < minRelative) minRelative = relative
+                                    if (relative < minRelative) {
+                                        minRelative = relative
+                                        minTipTip = dTip
+                                    }
                                 }
                             }
                         }
                     }
+                    // Log the current tip-tip (index,thumb) distance and scaled relative value
+                    try {
+                        Log.d(TAG, String.format(Locale.US, "Pinch distances: tipTip=%.4f, relative=%.4f", minTipTip, minRelative))
+                    } catch (_: Exception) {}
                     // Update hysteresis state
                     if (!isPinching && minRelative < pinchThreshold) {
                         isPinching = true
@@ -689,6 +707,13 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         val dx = x1 - x2
         val dy = y1 - y2
         return kotlin.math.sqrt(dx * dx + dy * dy)
+    }
+
+    private fun euclideanDistance3D(x1: Double, y1: Double, z1: Double, x2: Double, y2: Double, z2: Double): Double {
+        val dx = x1 - x2
+        val dy = y1 - y2
+        val dz = z1 - z2
+        return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
     }
 
     private fun setupGestureRecognizer() {
