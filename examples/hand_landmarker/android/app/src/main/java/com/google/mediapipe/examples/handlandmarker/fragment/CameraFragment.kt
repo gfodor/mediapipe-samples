@@ -122,19 +122,19 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
     private fun loadSettings() {
         val p = getPrefs()
         viewModel.setMinHandDetectionConfidence(
-            p.getFloat(KEY_DETECTION, viewModel.currentMinHandDetectionConfidence)
+            p.getFloat(KEY_DETECTION, 0.1f)
         )
         viewModel.setMinHandTrackingConfidence(
-            p.getFloat(KEY_TRACKING, viewModel.currentMinHandTrackingConfidence)
+            p.getFloat(KEY_TRACKING, 0.1f)
         )
         viewModel.setMinHandPresenceConfidence(
-            p.getFloat(KEY_PRESENCE, viewModel.currentMinHandPresenceConfidence)
+            p.getFloat(KEY_PRESENCE, 0.1f)
         )
-        viewModel.setMaxHands(p.getInt(KEY_MAX_HANDS, viewModel.currentMaxHands))
+        viewModel.setMaxHands(p.getInt(KEY_MAX_HANDS, 1))
         viewModel.setDelegate(p.getInt(KEY_DELEGATE, viewModel.currentDelegate))
-        gestureThreshold = p.getFloat(KEY_GESTURE_THRESHOLD, 0.1f)
-        pinchThreshold = p.getFloat(KEY_PINCH_THRESHOLD, 2.0f)
-        pinchReleaseThreshold = p.getFloat(KEY_PINCH_RELEASE_THRESHOLD, 3.0f)
+        gestureThreshold = p.getFloat(KEY_GESTURE_THRESHOLD, 0.25f)
+        pinchThreshold = p.getFloat(KEY_PINCH_THRESHOLD, 15.0f)
+        pinchReleaseThreshold = p.getFloat(KEY_PINCH_RELEASE_THRESHOLD, 17.5f)
         val rw = p.getInt(KEY_RES_W, -1)
         val rh = p.getInt(KEY_RES_H, -1)
         selectedResolution = if (rw > 0 && rh > 0) Size(rw, rh) else null
