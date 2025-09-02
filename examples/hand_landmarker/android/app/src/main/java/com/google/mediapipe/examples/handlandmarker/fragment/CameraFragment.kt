@@ -100,6 +100,7 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
     private var pinchThreshold: Float = 2.0f
     private var pinchReleaseThreshold: Float = 3.0f
     @Volatile private var isPinching: Boolean = false
+    @Volatile private var isFistActive: Boolean = false
     private var availableResolutions: List<Size> = emptyList()
     private var selectedResolution: Size? = null
     private var gestureRecognizer: GestureRecognizer? = null
@@ -636,6 +637,12 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
 
                 // Pinch detection using knuckle-scaled distance (distance invariant) with hysteresis
                 try {
+                    // If a fist is active, do not allow pinch; hide and return
+                    if (isFistActive) {
+                        isPinching = false
+                        try { fragmentCameraBinding.pinchLabel.visibility = View.GONE } catch (_: Exception) {}
+                        return@runOnUiThread
+                    }
                     val hr = resultBundle.results.firstOrNull()
                     var minRelative = Double.MAX_VALUE
                     if (hr != null && hr.landmarks().isNotEmpty()) {
@@ -751,15 +758,22 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
 
         val isFist = topName == "Closed_Fist" || topName == "Fist_Closed"
         val passes = topScore >= gestureThreshold
+        // Heuristic: release pinch when a fist is detected with sufficient score
+        isFistActive = isFist && passes
+        if (isFistActive) {
+            isPinching = false
+        }
         activity?.runOnUiThread {
             val label = fragmentCameraBinding.gestureLabel
-            if (isFist && passes) {
+            if (isFistActive) {
                 label.text = String.format(Locale.US, "Fist Closed (%.2f)", topScore)
                 label.setTextColor(android.graphics.Color.RED)
                 label.visibility = View.VISIBLE
                 label.alpha = 1f
                 label.bringToFront()
                 try { label.translationZ = 1000f } catch (_: Exception) {}
+                // Also hide the pinch label immediately for responsiveness
+                try { fragmentCameraBinding.pinchLabel.visibility = View.GONE } catch (_: Exception) {}
             } else {
                 label.text = ""
                 label.visibility = View.INVISIBLE
