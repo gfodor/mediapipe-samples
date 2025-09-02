@@ -817,11 +817,37 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
             val latch = java.util.concurrent.CountDownLatch(1)
             activity?.runOnUiThread {
                 try {
-                    // Configure default session if needed
+                    // Configure session: camera config > 640x480, autofocus enabled, torch on
                     try {
                         val s = arSession
                         if (s != null) {
+                            try {
+                                val filter = com.google.ar.core.CameraConfigFilter(s)
+                                    .setFacingDirection(com.google.ar.core.CameraConfig.FacingDirection.BACK)
+                                val configs = s.getSupportedCameraConfigs(filter)
+                                var chosen: com.google.ar.core.CameraConfig? = null
+                                for (cc in configs) {
+                                    val sz = cc.imageSize
+                                    if (sz.width > 640 && sz.height > 480) { chosen = cc; break }
+                                }
+                                if (chosen == null && configs.isNotEmpty()) chosen = configs[0]
+                                if (chosen != null) {
+                                    s.setCameraConfig(chosen)
+                                    Log.i(TAG, "ARCore: using camera config ${'$'}{chosen.imageSize.width}x${'$'}{chosen.imageSize.height}")
+                                } else {
+                                    Log.w(TAG, "ARCore: no suitable camera config found")
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "ARCore: camera config selection failed: ${'$'}{e.message}")
+                            }
+
                             val cfg = com.google.ar.core.Config(s)
+                            try {
+                                cfg.setFocusMode(com.google.ar.core.Config.FocusMode.AUTO)
+                            } catch (_: Exception) {}
+                            try {
+                                cfg.setFlashMode(com.google.ar.core.Config.FlashMode.TORCH)
+                            } catch (_: Exception) {}
                             s.configure(cfg)
                         }
                     } catch (_: Exception) {}
@@ -867,4 +893,5 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
             }
         }
     }
+    
 }
