@@ -43,6 +43,8 @@
     <string name="label_hand_presence_confidence_threshold">Presence
         Threshold</string>
     <string name="label_gesture_threshold">Gesture Threshold</string>
+    <string name="label_pinch_threshold">Pinch Threshold</string>
+    <string name="label_pinch_release_threshold">Pinch Release Threshold</string>
     <string name="label_num_hands">Number of Hands</string>
     <string name="label_delegate">Delegate</string>
     <string name="label_resolution">Resolution</string>

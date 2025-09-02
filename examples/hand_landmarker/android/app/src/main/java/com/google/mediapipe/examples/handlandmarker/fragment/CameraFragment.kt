@@ -78,6 +78,8 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         private const val KEY_PRESENCE = "min_hand_presence_conf"
         private const val KEY_MAX_HANDS = "max_hands"
         private const val KEY_GESTURE_THRESHOLD = "gesture_threshold"
+        private const val KEY_PINCH_THRESHOLD = "pinch_threshold"
+        private const val KEY_PINCH_RELEASE_THRESHOLD = "pinch_release_threshold"
         private const val KEY_RES_W = "res_width"
         private const val KEY_RES_H = "res_height"
     }
@@ -95,6 +97,9 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraFacing = CameraSelector.LENS_FACING_BACK
     private var gestureThreshold: Float = 0.1f
+    private var pinchThreshold: Float = 2.0f
+    private var pinchReleaseThreshold: Float = 3.0f
+    @Volatile private var isPinching: Boolean = false
     private var availableResolutions: List<Size> = emptyList()
     private var selectedResolution: Size? = null
     private var gestureRecognizer: GestureRecognizer? = null
@@ -127,6 +132,8 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         viewModel.setMaxHands(p.getInt(KEY_MAX_HANDS, viewModel.currentMaxHands))
         viewModel.setDelegate(p.getInt(KEY_DELEGATE, viewModel.currentDelegate))
         gestureThreshold = p.getFloat(KEY_GESTURE_THRESHOLD, 0.1f)
+        pinchThreshold = p.getFloat(KEY_PINCH_THRESHOLD, 2.0f)
+        pinchReleaseThreshold = p.getFloat(KEY_PINCH_RELEASE_THRESHOLD, 3.0f)
         val rw = p.getInt(KEY_RES_W, -1)
         val rh = p.getInt(KEY_RES_H, -1)
         selectedResolution = if (rw > 0 && rh > 0) Size(rw, rh) else null
@@ -148,6 +155,8 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                 editor.putInt(KEY_MAX_HANDS, viewModel.currentMaxHands)
             }
             editor.putFloat(KEY_GESTURE_THRESHOLD, gestureThreshold)
+            editor.putFloat(KEY_PINCH_THRESHOLD, pinchThreshold)
+            editor.putFloat(KEY_PINCH_RELEASE_THRESHOLD, pinchReleaseThreshold)
             selectedResolution?.let { s ->
                 editor.putInt(KEY_RES_W, s.width)
                 editor.putInt(KEY_RES_H, s.height)
@@ -242,6 +251,8 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         // Ensure gesture label overlays above preview/overlay
         fragmentCameraBinding.gestureLabel.bringToFront()
         try { fragmentCameraBinding.gestureLabel.translationZ = 1000f } catch (_: Exception) {}
+        fragmentCameraBinding.pinchLabel.bringToFront()
+        try { fragmentCameraBinding.pinchLabel.translationZ = 1000f } catch (_: Exception) {}
 
         // Hide CameraX view and set a white background. ARCore provides frames offscreen.
         fragmentCameraBinding.viewFinder.visibility = View.GONE
@@ -289,6 +300,14 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         fragmentCameraBinding.bottomSheetLayout.gestureThresholdValue.text =
             String.format(Locale.US, "%.3f", gestureThreshold)
 
+        // Pinch threshold
+        fragmentCameraBinding.bottomSheetLayout.pinchThresholdValue.text =
+            String.format(Locale.US, "%.2f", pinchThreshold)
+
+        // Pinch release threshold
+        fragmentCameraBinding.bottomSheetLayout.pinchReleaseThresholdValue.text =
+            String.format(Locale.US, "%.2f", pinchReleaseThreshold)
+
         // When clicked, lower hand detection score threshold floor
         fragmentCameraBinding.bottomSheetLayout.detectionThresholdMinus.setOnClickListener {
             if (handLandmarkerHelper.minHandDetectionConfidence >= 0.2) {
@@ -334,6 +353,43 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
             if (handLandmarkerHelper.minHandPresenceConfidence <= 0.8) {
                 handLandmarkerHelper.minHandPresenceConfidence += 0.1f
                 updateControlsUi()
+            }
+        }
+
+        // Pinch threshold controls
+        fragmentCameraBinding.bottomSheetLayout.pinchThresholdMinus.setOnClickListener {
+            // Reasonable bounds 0.5..5.0, step 0.05
+            if (pinchThreshold > 0.5f) {
+                pinchThreshold = (pinchThreshold - 0.05f).coerceAtLeast(0.5f)
+                fragmentCameraBinding.bottomSheetLayout.pinchThresholdValue.text =
+                    String.format(Locale.US, "%.2f", pinchThreshold)
+                saveSettings()
+            }
+        }
+        fragmentCameraBinding.bottomSheetLayout.pinchThresholdPlus.setOnClickListener {
+            if (pinchThreshold < 10.0f) {
+                pinchThreshold = (pinchThreshold + 0.05f).coerceAtMost(10.0f)
+                fragmentCameraBinding.bottomSheetLayout.pinchThresholdValue.text =
+                    String.format(Locale.US, "%.2f", pinchThreshold)
+                saveSettings()
+            }
+        }
+
+        // Pinch release threshold controls
+        fragmentCameraBinding.bottomSheetLayout.pinchReleaseThresholdMinus.setOnClickListener {
+            if (pinchReleaseThreshold > 0.5f) {
+                pinchReleaseThreshold = (pinchReleaseThreshold - 0.05f).coerceAtLeast(0.5f)
+                fragmentCameraBinding.bottomSheetLayout.pinchReleaseThresholdValue.text =
+                    String.format(Locale.US, "%.2f", pinchReleaseThreshold)
+                saveSettings()
+            }
+        }
+        fragmentCameraBinding.bottomSheetLayout.pinchReleaseThresholdPlus.setOnClickListener {
+            if (pinchReleaseThreshold < 10.0f) {
+                pinchReleaseThreshold = (pinchReleaseThreshold + 0.05f).coerceAtMost(10.0f)
+                fragmentCameraBinding.bottomSheetLayout.pinchReleaseThresholdValue.text =
+                    String.format(Locale.US, "%.2f", pinchReleaseThreshold)
+                saveSettings()
             }
         }
 
@@ -422,6 +478,10 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         // Update gesture threshold UI
         fragmentCameraBinding.bottomSheetLayout.gestureThresholdValue.text =
             String.format(Locale.US, "%.3f", gestureThreshold)
+        fragmentCameraBinding.bottomSheetLayout.pinchThresholdValue.text =
+            String.format(Locale.US, "%.2f", pinchThreshold)
+        fragmentCameraBinding.bottomSheetLayout.pinchReleaseThresholdValue.text =
+            String.format(Locale.US, "%.2f", pinchReleaseThreshold)
 
         // Needs to be cleared instead of reinitialized because the GPU
         // delegate needs to be initialized on the thread using it when applicable
@@ -573,8 +633,55 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
 
                 // Force a redraw
                 fragmentCameraBinding.overlay.invalidate()
+
+                // Pinch detection using knuckle-scaled distance (distance invariant) with hysteresis
+                try {
+                    val hr = resultBundle.results.firstOrNull()
+                    var minRelative = Double.MAX_VALUE
+                    if (hr != null && hr.landmarks().isNotEmpty()) {
+                        for (hand in hr.landmarks()) {
+                            if (hand.size >= 9) {
+                                val thumbTip = hand[4]
+                                val indexTip = hand[8]
+                                val thumbIp = hand[3]
+                                val indexDip = hand[7]
+
+                                val dTip = euclideanDistance2D(thumbTip.x().toDouble(), thumbTip.y().toDouble(), indexTip.x().toDouble(), indexTip.y().toDouble())
+                                val dThumb = euclideanDistance2D(thumbTip.x().toDouble(), thumbTip.y().toDouble(), thumbIp.x().toDouble(), thumbIp.y().toDouble())
+                                val dIndex = euclideanDistance2D(indexTip.x().toDouble(), indexTip.y().toDouble(), indexDip.x().toDouble(), indexDip.y().toDouble())
+
+                                val denom = 0.5 * (dThumb + dIndex)
+                                if (denom > 1e-6) {
+                                    val relative = (dTip * 10.0) / denom
+                                    if (relative < minRelative) minRelative = relative
+                                }
+                            }
+                        }
+                    }
+                    // Update hysteresis state
+                    if (!isPinching && minRelative < pinchThreshold) {
+                        isPinching = true
+                    } else if (isPinching && minRelative > pinchReleaseThreshold) {
+                        isPinching = false
+                    }
+                    val pinchLabel = fragmentCameraBinding.pinchLabel
+                    if (isPinching) {
+                        pinchLabel.visibility = View.VISIBLE
+                        pinchLabel.alpha = 1f
+                        pinchLabel.bringToFront()
+                        try { pinchLabel.translationZ = 1000f } catch (_: Exception) {}
+                    } else {
+                        pinchLabel.visibility = View.GONE
+                    }
+                } catch (_: Exception) { }
             }
         }
+    }
+
+    private fun euclideanDistance2D(x1: Double, y1: Double, x2: Double, y2: Double): Double {
+        val dx = x1 - x2
+        val dy = y1 - y2
+        return kotlin.math.sqrt(dx * dx + dy * dy)
     }
 
     private fun setupGestureRecognizer() {
