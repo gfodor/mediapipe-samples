@@ -241,6 +241,7 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
 
         // Ensure gesture label overlays above preview/overlay
         fragmentCameraBinding.gestureLabel.bringToFront()
+        try { fragmentCameraBinding.gestureLabel.translationZ = 1000f } catch (_: Exception) {}
 
         // Hide CameraX view and set a white background. ARCore provides frames offscreen.
         fragmentCameraBinding.viewFinder.visibility = View.GONE
@@ -425,6 +426,7 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         // Needs to be cleared instead of reinitialized because the GPU
         // delegate needs to be initialized on the thread using it when applicable
         backgroundExecutor.execute {
+            
             handLandmarkerHelper.clearHandLandmarker()
             handLandmarkerHelper.setupHandLandmarker()
             closeGestureRecognizer()
@@ -577,14 +579,17 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
 
     private fun setupGestureRecognizer() {
         try {
+            
             val base = BaseOptions.builder()
                 .setModelAssetPath("gesture_recognizer.task")
                 .setDelegate(Delegate.GPU)
                 .build()
 
             val canned = ClassifierOptions.builder()
-                .setScoreThreshold(0.5f)
-                .setCategoryAllowlist(listOf("Closed_Fist", "Open_Palm"))
+                // Use adjustable sensitivity
+                .setScoreThreshold(gestureThreshold)
+                // Support both naming variants just in case
+                .setCategoryAllowlist(listOf("Closed_Fist", "Fist_Closed"))
                 .build()
 
             val opts = GestureRecognizer.GestureRecognizerOptions.builder()
@@ -599,6 +604,7 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
                 .build()
 
             gestureRecognizer = GestureRecognizer.createFromOptions(requireContext(), opts)
+            
         } catch (e: Exception) {
             Log.e(TAG, "Failed to init GestureRecognizer: ${e.message}")
         }
@@ -610,7 +616,49 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
     }
 
     private fun onGestureResults(result: GestureRecognizerResult, input: MPImage) {
-        // Do not override tracking position label; keep recognition running only for testing.
+        // Log all categories per-hand
+        try {
+            val all = result.gestures()
+            var idx = 0
+            for (hand in all) {
+                // consume to avoid unused warnings
+                if (hand.isNotEmpty()) { val dummyName = hand[0].categoryName() }
+                idx++
+            }
+        } catch (_: Exception) { }
+
+        // Determine top category across hands
+        var topName: String? = null
+        var topScore = 0f
+        try {
+            for (hand in result.gestures()) {
+                if (hand.isNotEmpty()) {
+                    val cat = hand[0]
+                    if (cat.score() > topScore) {
+                        topScore = cat.score()
+                        topName = cat.categoryName()
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+
+        val isFist = topName == "Closed_Fist" || topName == "Fist_Closed"
+        val passes = topScore >= gestureThreshold
+        activity?.runOnUiThread {
+            val label = fragmentCameraBinding.gestureLabel
+            if (isFist && passes) {
+                label.text = String.format(Locale.US, "Fist Closed (%.2f)", topScore)
+                label.setTextColor(android.graphics.Color.RED)
+                label.visibility = View.VISIBLE
+                label.alpha = 1f
+                label.bringToFront()
+                try { label.translationZ = 1000f } catch (_: Exception) {}
+            } else {
+                label.text = ""
+                label.visibility = View.INVISIBLE
+                label.alpha = 1f
+            }
+        }
     }
 
     override fun onError(error: String, errorCode: Int) {
@@ -698,11 +746,7 @@ class CameraFragment : Fragment(), HandLandmarkerHelper.LandmarkerListener {
         while (arRunning) {
             try {
                 val frame: Frame = session.update()
-                val pose = frame.camera.pose
-                activity?.runOnUiThread {
-                    fragmentCameraBinding.gestureLabel.text = String.format("(%.2f, %.2f, %.2f)", pose.tx(), pose.ty(), pose.tz())
-                    fragmentCameraBinding.gestureLabel.visibility = View.VISIBLE
-                }
+                // AR pose is not shown to avoid overriding the gesture label
 
                 val rgba = oesConv!!.convert(frame)
                 val mpImage = ByteBufferImageBuilder(rgba, targetW, targetH, MPImage.IMAGE_FORMAT_RGBA).build()

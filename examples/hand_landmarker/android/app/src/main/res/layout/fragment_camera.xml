@@ -26,26 +26,35 @@
         android:layout_height="match_parent"
         app:scaleType="fillStart" />
 
-    <com.google.mediapipe.examples.handlandmarker.OverlayView
-        android:id="@+id/overlay"
+    <FrameLayout
+        android:id="@+id/overlay_container"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:elevation="12dp">
 
-    <TextView
-        android:id="@+id/gesture_label"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_margin="12dp"
-        android:paddingLeft="8dp"
-        android:paddingRight="8dp"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
-        android:textColor="@android:color/white"
-        android:textSize="16sp"
-        android:background="#66000000"
-        android:text=""
-        app:layout_anchor="@id/view_finder"
-        app:layout_anchorGravity="center" />
+        <com.google.mediapipe.examples.handlandmarker.OverlayView
+            android:id="@+id/overlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/gesture_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="12dp"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:textColor="#FF0000"
+android:textSize="24sp"
+            android:textStyle="bold"
+            android:background="#66000000"
+            android:text=""
+            android:visibility="visible"
+            android:layout_gravity="top|start" />
+
+    </FrameLayout>
 
     <include
         android:id="@+id/bottom_sheet_layout"
